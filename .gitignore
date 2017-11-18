@@ -1,2 +1,6 @@
 MNIST_data
 log
+
+data
+
+*.pyc
