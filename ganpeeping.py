@@ -16,7 +16,6 @@ import argparse
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-import os
 from matplotlib import animation
 # import seaborn as sns
 
@@ -59,45 +58,59 @@ def linear(input, output_dim, scope=None, stddev=1.0):
             [output_dim],
             initializer=tf.constant_initializer(0.0)
         )
-        return tf.matmul(input, w) + b
+        combined = tf.get_variable(
+            'combined',
+            [input.get_shape()[1]+1, output_dim]
+        )
+        b1 = tf.reshape(b,[1, b.get_shape()[0]])
+        combined = tf.concat([ w, b1 ], axis=0)
+        # combined = w
+        return [tf.matmul(input, w) + b, combined]
 
 
-def common_layer(output_dim, input=None, scope=None, stddev=1.0, reuse=None):
-    # input = tf.placeholder(tf.float32, [None, output_dim])
-    with tf.variable_scope('shared_knowledge', reuse=reuse):
-        w = tf.get_variable(
-            'w',
-            [output_dim, output_dim],
-            initializer=tf.random_normal_initializer(stddev=stddev)
-        )
-        b = tf.get_variable(
-            'b',
-            [output_dim],
-            initializer=tf.constant_initializer(0.0)
-        )
-        return tf.matmul(input, w) + b
+# def common_layer(input_dim, output_dim, input=None, scope=None, stddev=1.0, reuse=None):
+#     input = tf.placeholder(float32, [None, input_dim])
+#     with tf.variable_scope('shared_knowledge', reuse=reuse):
+#         w = tf.get_variable(
+#             'w',
+#             [input_dim, output_dim],
+#             initializer=tf.random_normal_initializer(stddev=stddev)
+#         )
+#         b = tf.get_variable(
+#             'b',
+#             [output_dim],
+#             initializer=tf.constant_initializer(0.0)
+#         )
+#         return tf.matmul(input, w) + b
 
 
 def generator(input, h_dim):
-    h0 = tf.nn.softplus(linear(input, h_dim, 'g0'))
-    h1 = tf.nn.softplus(linear(h0, h_dim, 'gt'))
-    h2 = linear(h1, 1, 'g1')
-    return h2
+    h0 = tf.nn.softplus(linear(input, h_dim, 'g0')[0])
+    lin_act = linear(h0, h_dim, 'gt')
+    h1 = tf.nn.softplus(lin_act[0])
+    h2 = linear(h1, 1, 'g1')[0]
+    return h2, lin_act[1]
 
 
-def discriminator(input, h_dim, minibatch_layer=True):
-    h0 = tf.nn.relu(linear(input, h_dim, 'd0'))
-    h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-    h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
+def discriminator(input, g_hidden, h_dim, minibatch_layer=True):
+    h0 = tf.nn.relu(linear(input, h_dim, 'd0')[0])
+    h1 = tf.nn.relu(linear(h0, h_dim, 'dt')[0])
+
+    g_hidden_flattened = tf.reshape(g_hidden, [-1])
+    g_hidden_flattened = g_hidden_flattened+tf.zeros([input.get_shape()[0],4])
+
+    peeped_input = tf.concat([ h1, g_hidden_flattened ], axis=1)
+
+    h2 = tf.nn.relu(linear(peeped_input, h_dim * 2, 'd1')[0])
 
     # without the minibatch layer, the discriminator needs an additional layer
     # to have enough capacity to separate the two distributions correctly
     if minibatch_layer:
         h3 = minibatch(h2)
     else:
-        h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
+        h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2')[0])
 
-    h4 = tf.sigmoid(linear(h3, 1, scope='d3'))
+    h4 = tf.sigmoid(linear(h3, 1, scope='d3')[0])
     return h4
 
 
@@ -112,6 +125,7 @@ def minibatch(input, num_kernels=5, kernel_dim=3):
 
 
 def optimizer(loss, var_list, learning_rate):
+    # learning_rate = 0.0008
     step = tf.Variable(0, trainable=False)
     optimizer = tf.train.AdamOptimizer(learning_rate).minimize(
         loss,
@@ -135,19 +149,9 @@ class GAN(object):
     def __init__(self, params):
         # This defines the generator network - it takes samples from a noise
         # distribution as input, and passes them through an MLP.
-        h_dim = params.hidden_size
         with tf.variable_scope('G'):
             self.z = tf.placeholder(tf.float32, shape=(params.batch_size, 1))
-            input = self.z
-            h0 = tf.nn.softplus(linear(input, h_dim, 'g0'))
-            h1 = tf.Variable(0)
-            h2 = linear(h1, 1, 'g1')
-
-        with tf.variable_scope('S'):
-            h1 = common_layer(h_dim, h0)
-            # h1 = tf.nn.softplus(linear(h0, h_dim, 'gt'))
-        
-        self.G = h2
+            self.G, self.peep_gen = generator(self.z, params.hidden_size)
 
         # The discriminator tries to tell the difference between samples from
         # the true data distribution (self.x) and the generated samples
@@ -158,47 +162,21 @@ class GAN(object):
         # different inputs in TensorFlow.
         self.x = tf.placeholder(tf.float32, shape=(params.batch_size, 1))
 
-        minibatch_layer = params.minibatch
-
         with tf.variable_scope('D'):
-            h0 = tf.nn.relu(linear(self.x, h_dim, 'd0'))
-
-        with tf.variable_scope('S', reuse=True):
-            h1 = common_layer(h_dim, h0, reuse=True)
-
-        with tf.variable_scope('D'):
-            # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-            h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
-
-            # without the minibatch layer, the discriminator needs an additional layer
-            # to have enough capacity to separate the two distributions correctly
-            if minibatch_layer:
-                h3 = minibatch(h2)
-            else:
-                h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
-
-            self.D1 = tf.sigmoid(linear(h3, 1, scope='d3'))
-        
-        ## Second Discriminator Network
-
+            # self.peep_gen = tf.get_variable('G/gt/linear/combined:0')
+            self.D1 = discriminator(
+                self.x,
+                self.peep_gen,
+                params.hidden_size,
+                params.minibatch
+            )
         with tf.variable_scope('D', reuse=True):
-            h0 = tf.nn.relu(linear(self.G, h_dim, 'd0'))
-
-        with tf.variable_scope('S'):
-            h1 = common_layer(h_dim, h0, reuse=True)
-
-        with tf.variable_scope('D', reuse=True):
-            # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-            h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
-
-            # without the minibatch layer, the discriminator needs an additional layer
-            # to have enough capacity to separate the two distributions correctly
-            if minibatch_layer:
-                h3 = minibatch(h2)
-            else:
-                h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
-
-            self.D2 = tf.sigmoid(linear(h3, 1, scope='d3'))
+            self.D2 = discriminator(
+                self.G,
+                self.peep_gen,
+                params.hidden_size,
+                params.minibatch
+            )
 
         # Define the loss for discriminator and generator networks
         # (see the original paper for details), and create optimizers for both
@@ -209,9 +187,6 @@ class GAN(object):
         self.d_params = [v for v in vars if v.name.startswith('D/')]
         self.g_params = [v for v in vars if v.name.startswith('G/')]
 
-        self.d_params = [v for v in vars if v.name.startswith('S/')]
-        self.g_params = [v for v in vars if v.name.startswith('S/')]
-
         self.opt_d = optimizer(self.loss_d, self.d_params, params.d_learning_rate)
         self.opt_g = optimizer(self.loss_g, self.g_params, params.g_learning_rate)
 
@@ -221,8 +196,9 @@ class GAN(object):
         g_out_summary = tf.summary.histogram('g_out', self.G)
         d_real_out_summary = tf.summary.histogram('d_real_out', self.D1)
         d_fake_out_summary = tf.summary.histogram('d_fake_out', self.D2)
+        model_dist_summary = tf.summary.histogram('model_distribution', self.x)
 
-        self.d_summary = tf.summary.merge([ d_loss_summary, d_real_out_summary ])
+        self.d_summary = tf.summary.merge([ d_loss_summary, d_real_out_summary, model_dist_summary ])
         self.g_summary = tf.summary.merge([ g_loss_summary, d_fake_out_summary, g_out_summary ])
 
         self.test_summary = tf.summary.merge([ g_out_summary, d_real_out_summary ])
@@ -237,34 +213,24 @@ def train(model, data, gen, params, index=0):
         tf.local_variables_initializer().run()
         tf.global_variables_initializer().run()
 
-        x = data.sample(params.batch_size)
-
         for step in range(params.num_steps + 1):
+            # update discriminator
+            x = data.sample(params.batch_size)
+            z = gen.sample(params.batch_size)
+            summary, loss_d, _, = session.run([model.d_summary, model.loss_d, model.opt_d], {
+                model.x: np.reshape(x, (params.batch_size, 1)),
+                model.z: np.reshape(z, (params.batch_size, 1))
+            })
 
-            if step%params.generator_skip != 0:
-                # update discriminator
-                z = gen.sample(params.batch_size)
-                summary, loss_d, _, = session.run([model.d_summary, model.loss_d, model.opt_d], {
-                    model.x: np.reshape(x, (params.batch_size, 1)),
-                    model.z: np.reshape(z, (params.batch_size, 1))
-                })
+            train_writer.add_summary(summary, step)
 
-                train_writer.add_summary(summary, step)
-            else:
-                # update generator
-                x = data.sample(params.batch_size)
-                z = gen.sample(params.batch_size)
-                summary, loss_d = session.run([model.d_summary, model.loss_d], {
-                    model.x: np.reshape(x, (params.batch_size, 1)),
-                    model.z: np.reshape(z, (params.batch_size, 1))
-                })
+            # update generator
+            z = gen.sample(params.batch_size)
+            summary, loss_g, _ = session.run([model.g_summary, model.loss_g, model.opt_g], {
+                model.z: np.reshape(z, (params.batch_size, 1))
+            })
 
-                z = gen.sample(params.batch_size)
-                summary, loss_g, _ = session.run([model.g_summary, model.loss_g, model.opt_g], {
-                    model.z: np.reshape(z, (params.batch_size, 1))
-                })
-
-                train_writer.add_summary(summary, step)
+            train_writer.add_summary(summary, step)
 
             if step % params.log_every == 0:
                 print('{}: {:.4f}\t{:.4f}'.format(step, loss_d, loss_g))
@@ -298,19 +264,6 @@ def samples(
     xs = np.linspace(-sample_range, sample_range, num_points)
     bins = np.linspace(-sample_range, sample_range, num_bins)
 
-    # decision boundary
-    db = np.zeros((num_points, 1))
-    for i in range(num_points // batch_size):
-        db[batch_size * i:batch_size * (i + 1)] = session.run(
-            model.D1,
-            {
-                model.x: np.reshape(
-                    xs[batch_size * i:batch_size * (i + 1)],
-                    (batch_size, 1)
-                )
-            }
-        )
-
     # data distribution
     d = data.sample(num_points)
     pd, _ = np.histogram(d, bins=bins, density=True)
@@ -328,6 +281,20 @@ def samples(
                 )
             }
         )
+
+    # # decision boundary
+    db = np.zeros((num_points, 1))
+    for i in range(num_points // batch_size):
+        db[batch_size * i:batch_size * (i + 1)] = session.run(
+            model.D1,
+            {
+                model.x: np.reshape(
+                    xs[batch_size * i:batch_size * (i + 1)],
+                    (batch_size, 1)
+                )
+            }
+        )
+
     pg, _ = np.histogram(g, bins=bins, density=True)
 
     return db, pd, pg
@@ -342,6 +309,8 @@ def plot_distributions(samps, sample_range):
     ax.set_ylim(0, 1)
     plt.plot(p_x, pd, label='real data')
     plt.plot(p_x, pg, label='generated data')
+    # print "Mean: "+np.mean(p_x)
+    # print "Standard deviation"+np.std(p_x)
     plt.title('1D Generative Adversarial Network')
     plt.xlabel('Data values')
     plt.ylabel('Probability density')
@@ -401,16 +370,8 @@ def save_animation(anim_frames, anim_path, sample_range):
 
 
 def main(args):
-
-    index = 0
-    while True:
-      if not os.path.exists('log/'+str(index)):
-        os.makedirs('log/'+str(index))
-        break
-      index+=1
-
     model = GAN(args)
-    train(model, DataDistribution(), GeneratorDistribution(range=8), args, index)
+    train(model, DataDistribution(), GeneratorDistribution(range=8), args)
 
 
 def parse_args():
@@ -419,7 +380,7 @@ def parse_args():
                         help='the number of training steps to take')
     parser.add_argument('--hidden-size', type=int, default=2,
                         help='MLP hidden size')
-    parser.add_argument('--batch-size', type=int, default=8,
+    parser.add_argument('--batch-size', type=int, default=100,
                         help='the batch size')
     parser.add_argument('--minibatch', action='store_true',
                         help='use minibatch discrimination')
@@ -431,12 +392,10 @@ def parse_args():
                         help='save every Nth frame for animation')
     parser.add_argument('--use-common-layer', type=bool, default=False,
                         help='Use the modified common layer')
-    parser.add_argument('--g_learning_rate', type=float, default=0.0,
+    parser.add_argument('--g_learning_rate', type=float, default=0.001,
                         help='Change learning rate of generator')
     parser.add_argument('--d_learning_rate', type=float, default=0.001,
                         help='Change learning rate of discriminator')
-    parser.add_argument('--generator_skip', type=float, default=1,
-                        help='Skip generator updations')
     return parser.parse_args()
 
 

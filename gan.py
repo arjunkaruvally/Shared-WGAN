@@ -17,9 +17,9 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from matplotlib import animation
-# import seaborn as sns
+import seaborn as sns
 
-# sns.set(color_codes=True)
+sns.set(color_codes=True)
 
 seed = 42
 np.random.seed(seed)
@@ -61,43 +61,26 @@ def linear(input, output_dim, scope=None, stddev=1.0):
         return tf.matmul(input, w) + b
 
 
-def common_layer(input_dim, output_dim, input=None, scope=None, stddev=1.0, reuse=None):
-    input = tf.placeholder(float32, [None, input_dim])
-    with tf.variable_scope('shared_knowledge', reuse=reuse):
-        w = tf.get_variable(
-            'w',
-            [input_dim, output_dim],
-            initializer=tf.random_normal_initializer(stddev=stddev)
-        )
-        b = tf.get_variable(
-            'b',
-            [output_dim],
-            initializer=tf.constant_initializer(0.0)
-        )
-        return tf.matmul(input, w) + b
-
-
 def generator(input, h_dim):
     h0 = tf.nn.softplus(linear(input, h_dim, 'g0'))
-    h1 = tf.nn.softplus(linear(h0, h_dim, 'gt'))
-    h2 = linear(h1, 1, 'g1')
-    return h2
+    h1 = linear(h0, 1, 'g1')
+    return h1
 
 
 def discriminator(input, h_dim, minibatch_layer=True):
-    h0 = tf.nn.relu(linear(input, h_dim, 'd0'))
-    h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-    h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
+    h0 = tf.nn.relu(linear(input, h_dim * 2, 'd0'))
+    # ht = tf.nn.softplus(linear(h0, h_dim, 'gt'))
+    h1 = tf.nn.relu(linear(h0, h_dim * 2, 'd1'))
 
     # without the minibatch layer, the discriminator needs an additional layer
     # to have enough capacity to separate the two distributions correctly
     if minibatch_layer:
-        h3 = minibatch(h2)
+        h2 = minibatch(h1)
     else:
-        h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
+        h2 = tf.nn.relu(linear(h1, h_dim * 2, scope='d2'))
 
-    h4 = tf.sigmoid(linear(h3, 1, scope='d3'))
-    return h4
+    h3 = tf.sigmoid(linear(h2, 1, scope='d3'))
+    return h3
 
 
 def minibatch(input, num_kernels=5, kernel_dim=3):
@@ -147,7 +130,6 @@ class GAN(object):
         # that share parameters, as you cannot use the same network with
         # different inputs in TensorFlow.
         self.x = tf.placeholder(tf.float32, shape=(params.batch_size, 1))
-
         with tf.variable_scope('D'):
             self.D1 = discriminator(
                 self.x,
@@ -173,46 +155,29 @@ class GAN(object):
         self.opt_d = optimizer(self.loss_d, self.d_params)
         self.opt_g = optimizer(self.loss_g, self.g_params)
 
-        d_loss_summary = tf.summary.scalar('d_loss', self.loss_d)
-        g_loss_summary = tf.summary.scalar('g_loss', self.loss_g)
 
-        g_out_summary = tf.summary.histogram('g_out', self.G)
-        d_real_out_summary = tf.summary.histogram('d_real_out', self.D1)
-        d_fake_out_summary = tf.summary.histogram('d_fake_out', self.D2)
-
-        self.d_summary = tf.summary.merge([ d_loss_summary, d_real_out_summary ])
-        self.g_summary = tf.summary.merge([ g_loss_summary, d_fake_out_summary, g_out_summary ])
-
-        self.test_summary = tf.summary.merge([ g_out_summary, d_real_out_summary ])
-
-
-def train(model, data, gen, params, index=0):
-    anim_frames = [] 
+def train(model, data, gen, params):
+    anim_frames = []
 
     with tf.Session() as session:
-        train_writer = tf.summary.FileWriter('log/'+str(index), session.graph)
-
         tf.local_variables_initializer().run()
         tf.global_variables_initializer().run()
 
+        x = data.sample(params.batch_size)
+
         for step in range(params.num_steps + 1):
             # update discriminator
-            x = data.sample(params.batch_size)
             z = gen.sample(params.batch_size)
-            summary, loss_d, _, = session.run([model.d_summary, model.loss_d, model.opt_d], {
+            loss_d, _, = session.run([model.loss_d, model.opt_d], {
                 model.x: np.reshape(x, (params.batch_size, 1)),
                 model.z: np.reshape(z, (params.batch_size, 1))
             })
 
-            train_writer.add_summary(summary, step)
-
             # update generator
             z = gen.sample(params.batch_size)
-            summary, loss_g, _ = session.run([model.g_summary, model.loss_g, model.opt_g], {
+            loss_g, _ = session.run([model.loss_g, model.opt_g], {
                 model.z: np.reshape(z, (params.batch_size, 1))
             })
-
-            train_writer.add_summary(summary, step)
 
             if step % params.log_every == 0:
                 print('{}: {:.4f}\t{:.4f}'.format(step, loss_d, loss_g))
@@ -276,6 +241,11 @@ def samples(
                 )
             }
         )
+
+    print g
+    print "mean ", np.mean(np.array(g))
+    print "stddev", np.std(np.array(g))
+
     pg, _ = np.histogram(g, bins=bins, density=True)
 
     return db, pd, pg
@@ -357,7 +327,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num-steps', type=int, default=5000,
                         help='the number of training steps to take')
-    parser.add_argument('--hidden-size', type=int, default=2,
+    parser.add_argument('--hidden-size', type=int, default=4,
                         help='MLP hidden size')
     parser.add_argument('--batch-size', type=int, default=8,
                         help='the batch size')
@@ -369,8 +339,6 @@ def parse_args():
                         help='path to the output animation file')
     parser.add_argument('--anim-every', type=int, default=1,
                         help='save every Nth frame for animation')
-    parser.add_argument('--use-common-layer', type=bool, default=False,
-                        help='Use the modified common layer')
     return parser.parse_args()
 
 

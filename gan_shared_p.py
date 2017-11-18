@@ -16,7 +16,6 @@ import argparse
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-import os
 from matplotlib import animation
 # import seaborn as sns
 
@@ -62,12 +61,12 @@ def linear(input, output_dim, scope=None, stddev=1.0):
         return tf.matmul(input, w) + b
 
 
-def common_layer(output_dim, input=None, scope=None, stddev=1.0, reuse=None):
-    # input = tf.placeholder(tf.float32, [None, output_dim])
+def common_layer(input_dim, output_dim, input=None, scope=None, stddev=1.0, reuse=None):
+    input = tf.placeholder(float32, [None, input_dim])
     with tf.variable_scope('shared_knowledge', reuse=reuse):
         w = tf.get_variable(
             'w',
-            [output_dim, output_dim],
+            [input_dim, output_dim],
             initializer=tf.random_normal_initializer(stddev=stddev)
         )
         b = tf.get_variable(
@@ -80,22 +79,22 @@ def common_layer(output_dim, input=None, scope=None, stddev=1.0, reuse=None):
 
 def generator(input, h_dim):
     h0 = tf.nn.softplus(linear(input, h_dim, 'g0'))
-    h1 = tf.nn.softplus(linear(h0, h_dim, 'gt'))
+    h1 = tf.nn.softplus(linear(h0, h_dim, 'gshared'))
     h2 = linear(h1, 1, 'g1')
     return h2
 
 
 def discriminator(input, h_dim, minibatch_layer=True):
     h0 = tf.nn.relu(linear(input, h_dim, 'd0'))
-    h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-    h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
+    h1 = tf.nn.relu(linear(h0, h_dim, 'd1'))
+    h2 = tf.nn.relu(linear(h1, h_dim, 'dshared'))
 
     # without the minibatch layer, the discriminator needs an additional layer
     # to have enough capacity to separate the two distributions correctly
     if minibatch_layer:
         h3 = minibatch(h2)
     else:
-        h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
+        h3 = tf.nn.relu(linear(h2, h_dim , scope='d2'))
 
     h4 = tf.sigmoid(linear(h3, 1, scope='d3'))
     return h4
@@ -112,6 +111,7 @@ def minibatch(input, num_kernels=5, kernel_dim=3):
 
 
 def optimizer(loss, var_list, learning_rate):
+    # learning_rate = 0.001
     step = tf.Variable(0, trainable=False)
     optimizer = tf.train.AdamOptimizer(learning_rate).minimize(
         loss,
@@ -119,6 +119,17 @@ def optimizer(loss, var_list, learning_rate):
         var_list=var_list
     )
     return optimizer
+
+
+def copy_disc_shared():
+    shared_weights_g_w = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('gshared/w:0')]
+    shared_weights_g_b = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('gshared/b:0')]
+
+    shared_weights_d_w = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('dshared/w:0')]
+    shared_weights_d_b = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('gshared/w:0')]
+
+    shared_weights_g_w[0].assign(shared_weights_d_w[0])
+    shared_weights_g_b[0].assign(shared_weights_d_b[0])
 
 
 def log(x):
@@ -135,19 +146,10 @@ class GAN(object):
     def __init__(self, params):
         # This defines the generator network - it takes samples from a noise
         # distribution as input, and passes them through an MLP.
-        h_dim = params.hidden_size
+
         with tf.variable_scope('G'):
             self.z = tf.placeholder(tf.float32, shape=(params.batch_size, 1))
-            input = self.z
-            h0 = tf.nn.softplus(linear(input, h_dim, 'g0'))
-            h1 = tf.Variable(0)
-            h2 = linear(h1, 1, 'g1')
-
-        with tf.variable_scope('S'):
-            h1 = common_layer(h_dim, h0)
-            # h1 = tf.nn.softplus(linear(h0, h_dim, 'gt'))
-        
-        self.G = h2
+            self.G = generator(self.z, params.hidden_size)
 
         # The discriminator tries to tell the difference between samples from
         # the true data distribution (self.x) and the generated samples
@@ -158,47 +160,18 @@ class GAN(object):
         # different inputs in TensorFlow.
         self.x = tf.placeholder(tf.float32, shape=(params.batch_size, 1))
 
-        minibatch_layer = params.minibatch
-
         with tf.variable_scope('D'):
-            h0 = tf.nn.relu(linear(self.x, h_dim, 'd0'))
-
-        with tf.variable_scope('S', reuse=True):
-            h1 = common_layer(h_dim, h0, reuse=True)
-
-        with tf.variable_scope('D'):
-            # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-            h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
-
-            # without the minibatch layer, the discriminator needs an additional layer
-            # to have enough capacity to separate the two distributions correctly
-            if minibatch_layer:
-                h3 = minibatch(h2)
-            else:
-                h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
-
-            self.D1 = tf.sigmoid(linear(h3, 1, scope='d3'))
-        
-        ## Second Discriminator Network
-
+            self.D1 = discriminator(
+                self.x,
+                params.hidden_size,
+                params.minibatch
+            )
         with tf.variable_scope('D', reuse=True):
-            h0 = tf.nn.relu(linear(self.G, h_dim, 'd0'))
-
-        with tf.variable_scope('S'):
-            h1 = common_layer(h_dim, h0, reuse=True)
-
-        with tf.variable_scope('D', reuse=True):
-            # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-            h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
-
-            # without the minibatch layer, the discriminator needs an additional layer
-            # to have enough capacity to separate the two distributions correctly
-            if minibatch_layer:
-                h3 = minibatch(h2)
-            else:
-                h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
-
-            self.D2 = tf.sigmoid(linear(h3, 1, scope='d3'))
+            self.D2 = discriminator(
+                self.G,
+                params.hidden_size,
+                params.minibatch
+            )
 
         # Define the loss for discriminator and generator networks
         # (see the original paper for details), and create optimizers for both
@@ -209,8 +182,16 @@ class GAN(object):
         self.d_params = [v for v in vars if v.name.startswith('D/')]
         self.g_params = [v for v in vars if v.name.startswith('G/')]
 
-        self.d_params = [v for v in vars if v.name.startswith('S/')]
-        self.g_params = [v for v in vars if v.name.startswith('S/')]
+        # print "REmove attemp"
+        # print self.g_params
+        # print [v for v in vars if v.name.startswith('G/gshared/')][0]
+        # print [v for v in vars if v.name.startswith('G/dshared/')]
+
+        self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/w')][0])
+        # self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/b')][0])
+
+        # self.d_params.remove([v for v in vars if v.name.startswith('D/dshared/w')][0])
+        # self.d_params.remove([v for v in vars if v.name.startswith('D/dshared/b')][0])
 
         self.opt_d = optimizer(self.loss_d, self.d_params, params.d_learning_rate)
         self.opt_g = optimizer(self.loss_g, self.g_params, params.g_learning_rate)
@@ -227,6 +208,22 @@ class GAN(object):
 
         self.test_summary = tf.summary.merge([ g_out_summary, d_real_out_summary ])
 
+        # copy_gen_shared()
+
+        shared_weights_g = [v for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES) if v.name.endswith('gshared')]
+
+        shared_weights_g_w = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('gshared/w:0')]
+        shared_weights_g_b = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('gshared/b:0')]
+
+        shared_weights_d_w = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('dshared/w:0')]
+        shared_weights_d_b = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.endswith('dshared/b:0')]
+
+        self.copy_d_w_g = shared_weights_g_w[0].assign(shared_weights_d_w[0])
+        # self.copy_d_b_g = shared_weights_g_b[0].assign(shared_weights_d_b[0])
+
+        self.copy_g_w_d = shared_weights_d_w[0].assign(shared_weights_g_w[0])
+        # self.copy_g_b_d = shared_weights_d_b[0].assign(shared_weights_g_b[0])
+
 
 def train(model, data, gen, params, index=0):
     anim_frames = [] 
@@ -240,31 +237,29 @@ def train(model, data, gen, params, index=0):
         x = data.sample(params.batch_size)
 
         for step in range(params.num_steps + 1):
+            # update discriminator
+            z = gen.sample(params.batch_size)
+            summary, loss_d, _, = session.run([model.d_summary, model.loss_d, model.opt_d], {
+                model.x: np.reshape(x, (params.batch_size, 1)),
+                model.z: np.reshape(z, (params.batch_size, 1))
+            })
 
-            if step%params.generator_skip != 0:
-                # update discriminator
-                z = gen.sample(params.batch_size)
-                summary, loss_d, _, = session.run([model.d_summary, model.loss_d, model.opt_d], {
-                    model.x: np.reshape(x, (params.batch_size, 1)),
-                    model.z: np.reshape(z, (params.batch_size, 1))
-                })
+            train_writer.add_summary(summary, step)
 
-                train_writer.add_summary(summary, step)
-            else:
+            # session.run([model.copy_d_w_g, model.copy_d_b_g])
+            session.run([model.copy_d_w_g])
+
+            if step%params.generator_skip == 0:
                 # update generator
-                x = data.sample(params.batch_size)
-                z = gen.sample(params.batch_size)
-                summary, loss_d = session.run([model.d_summary, model.loss_d], {
-                    model.x: np.reshape(x, (params.batch_size, 1)),
-                    model.z: np.reshape(z, (params.batch_size, 1))
-                })
-
                 z = gen.sample(params.batch_size)
                 summary, loss_g, _ = session.run([model.g_summary, model.loss_g, model.opt_g], {
                     model.z: np.reshape(z, (params.batch_size, 1))
                 })
 
                 train_writer.add_summary(summary, step)
+
+                # session.run([model.copy_g_w_d, model.copy_g_b_d])
+                session.run([model.copy_g_w_d])
 
             if step % params.log_every == 0:
                 print('{}: {:.4f}\t{:.4f}'.format(step, loss_d, loss_g))
@@ -329,6 +324,10 @@ def samples(
             }
         )
     pg, _ = np.histogram(g, bins=bins, density=True)
+
+    print g
+    print "mean ", np.mean(np.array(g))
+    print "stddev", np.std(np.array(g))
 
     return db, pd, pg
 
@@ -401,27 +400,19 @@ def save_animation(anim_frames, anim_path, sample_range):
 
 
 def main(args):
-
-    index = 0
-    while True:
-      if not os.path.exists('log/'+str(index)):
-        os.makedirs('log/'+str(index))
-        break
-      index+=1
-
     model = GAN(args)
-    train(model, DataDistribution(), GeneratorDistribution(range=8), args, index)
+    train(model, DataDistribution(), GeneratorDistribution(range=8), args)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--num-steps', type=int, default=10000,
+    parser.add_argument('--num-steps', type=int, default=5000,
                         help='the number of training steps to take')
     parser.add_argument('--hidden-size', type=int, default=2,
                         help='MLP hidden size')
-    parser.add_argument('--batch-size', type=int, default=8,
+    parser.add_argument('--batch-size', type=int, default=20,
                         help='the batch size')
-    parser.add_argument('--minibatch', action='store_true',
+    parser.add_argument('--minibatch', action='store_false',
                         help='use minibatch discrimination')
     parser.add_argument('--log-every', type=int, default=10,
                         help='print loss after this many steps')
@@ -431,12 +422,12 @@ def parse_args():
                         help='save every Nth frame for animation')
     parser.add_argument('--use-common-layer', type=bool, default=False,
                         help='Use the modified common layer')
-    parser.add_argument('--g_learning_rate', type=float, default=0.0,
+    parser.add_argument('--d_learning_rate', type=float, default=0.0040001,
                         help='Change learning rate of generator')
-    parser.add_argument('--d_learning_rate', type=float, default=0.001,
+    parser.add_argument('--g_learning_rate', type=float, default=0.0040001,
                         help='Change learning rate of discriminator')
     parser.add_argument('--generator_skip', type=float, default=1,
-                        help='Skip generator updations')
+                        help='Change skip frequency of generator')
     return parser.parse_args()
 
 

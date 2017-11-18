@@ -47,8 +47,8 @@ class GeneratorDistribution(object):
             np.random.random(N) * 0.01
 
 
-def linear(input, output_dim, scope=None, stddev=1.0):
-    with tf.variable_scope(scope or 'linear'):
+def linear(input, output_dim, scope=None, stddev=1.0, reuse=None):
+    with tf.variable_scope(scope or 'linear', reuse=reuse):
         w = tf.get_variable(
             'w',
             [input.get_shape()[1], output_dim],
@@ -136,17 +136,13 @@ class GAN(object):
         # This defines the generator network - it takes samples from a noise
         # distribution as input, and passes them through an MLP.
         h_dim = params.hidden_size
-        with tf.variable_scope('G'):
-            self.z = tf.placeholder(tf.float32, shape=(params.batch_size, 1))
-            input = self.z
-            h0 = tf.nn.softplus(linear(input, h_dim, 'g0'))
-            h1 = tf.Variable(0)
-            h2 = linear(h1, 1, 'g1')
 
-        with tf.variable_scope('S'):
-            h1 = common_layer(h_dim, h0)
-            # h1 = tf.nn.softplus(linear(h0, h_dim, 'gt'))
-        
+        ## Generator
+        self.z = tf.placeholder(tf.float32, shape=(params.batch_size, 1))
+        input = self.z
+        h0 = tf.nn.softplus(linear(input, h_dim, 'g0'))
+        h1 = common_layer(h_dim, h0)
+        h2 = linear(h1, 1, 'g1')
         self.G = h2
 
         # The discriminator tries to tell the difference between samples from
@@ -160,45 +156,38 @@ class GAN(object):
 
         minibatch_layer = params.minibatch
 
-        with tf.variable_scope('D'):
-            h0 = tf.nn.relu(linear(self.x, h_dim, 'd0'))
+        # Discriminator1
 
-        with tf.variable_scope('S', reuse=True):
-            h1 = common_layer(h_dim, h0, reuse=True)
+        h0 = tf.nn.relu(linear(self.x, h_dim, 'd0'))
+        h1 = common_layer(h_dim, h0, reuse=True)
+        # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
+        h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
 
-        with tf.variable_scope('D'):
-            # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-            h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
+        # without the minibatch layer, the discriminator needs an additional layer
+        # to have enough capacity to separate the two distributions correctly
+        if minibatch_layer:
+            h3 = minibatch(h2)
+        else:
+            h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
 
-            # without the minibatch layer, the discriminator needs an additional layer
-            # to have enough capacity to separate the two distributions correctly
-            if minibatch_layer:
-                h3 = minibatch(h2)
-            else:
-                h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
-
-            self.D1 = tf.sigmoid(linear(h3, 1, scope='d3'))
-        
+        self.D1 = tf.sigmoid(linear(h3, 1, scope='d3'))
+    
         ## Second Discriminator Network
 
-        with tf.variable_scope('D', reuse=True):
-            h0 = tf.nn.relu(linear(self.G, h_dim, 'd0'))
+        h0 = tf.nn.relu(linear(self.G, h_dim, 'd0', reuse=True))
+        h1 = common_layer(h_dim, h0, reuse=True)
 
-        with tf.variable_scope('S'):
-            h1 = common_layer(h_dim, h0, reuse=True)
+        # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
+        h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1', reuse=True))
 
-        with tf.variable_scope('D', reuse=True):
-            # h1 = tf.nn.relu(linear(h0, h_dim, 'dt'))
-            h2 = tf.nn.relu(linear(h1, h_dim * 2, 'd1'))
+        # without the minibatch layer, the discriminator needs an additional layer
+        # to have enough capacity to separate the two distributions correctly
+        if minibatch_layer:
+            h3 = minibatch(h2)
+        else:
+            h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2', reuse=True))
 
-            # without the minibatch layer, the discriminator needs an additional layer
-            # to have enough capacity to separate the two distributions correctly
-            if minibatch_layer:
-                h3 = minibatch(h2)
-            else:
-                h3 = tf.nn.relu(linear(h2, h_dim * 2, scope='d2'))
-
-            self.D2 = tf.sigmoid(linear(h3, 1, scope='d3'))
+        self.D2 = tf.sigmoid(linear(h3, 1, scope='d3', reuse=True))
 
         # Define the loss for discriminator and generator networks
         # (see the original paper for details), and create optimizers for both
@@ -206,11 +195,14 @@ class GAN(object):
         self.loss_g = tf.reduce_mean(-log(self.D2))
 
         vars = tf.trainable_variables()
-        self.d_params = [v for v in vars if v.name.startswith('D/')]
-        self.g_params = [v for v in vars if v.name.startswith('G/')]
+        self.d_params = [v for v in vars if v.name.startswith('d')]
+        self.g_params = [v for v in vars if v.name.startswith('g')]
 
-        self.d_params = [v for v in vars if v.name.startswith('S/')]
-        self.g_params = [v for v in vars if v.name.startswith('S/')]
+        self.d_params.extend([v for v in vars if v.name.startswith('shared_knowledge')])
+        self.g_params.extend([v for v in vars if v.name.startswith('shared_knowledge')])
+
+        print self.d_params
+        print self.g_params
 
         self.opt_d = optimizer(self.loss_d, self.d_params, params.d_learning_rate)
         self.opt_g = optimizer(self.loss_g, self.g_params, params.g_learning_rate)
@@ -237,12 +229,11 @@ def train(model, data, gen, params, index=0):
         tf.local_variables_initializer().run()
         tf.global_variables_initializer().run()
 
-        x = data.sample(params.batch_size)
-
         for step in range(params.num_steps + 1):
 
             if step%params.generator_skip != 0:
                 # update discriminator
+                x = data.sample(params.batch_size)
                 z = gen.sample(params.batch_size)
                 summary, loss_d, _, = session.run([model.d_summary, model.loss_d, model.opt_d], {
                     model.x: np.reshape(x, (params.batch_size, 1)),
@@ -258,6 +249,8 @@ def train(model, data, gen, params, index=0):
                     model.x: np.reshape(x, (params.batch_size, 1)),
                     model.z: np.reshape(z, (params.batch_size, 1))
                 })
+
+                train_writer.add_summary(summary, step)
 
                 z = gen.sample(params.batch_size)
                 summary, loss_g, _ = session.run([model.g_summary, model.loss_g, model.opt_g], {
