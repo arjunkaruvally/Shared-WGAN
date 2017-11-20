@@ -94,7 +94,7 @@ def minibatch(input, num_kernels=5, kernel_dim=3):
 
 
 def optimizer(loss, var_list):
-    learning_rate = 0.001
+    learning_rate = 0.01
     step = tf.Variable(0, trainable=False)
     optimizer = tf.train.AdamOptimizer(learning_rate).minimize(
         loss,

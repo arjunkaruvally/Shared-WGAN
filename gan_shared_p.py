@@ -29,11 +29,16 @@ tf.set_random_seed(seed)
 class DataDistribution(object):
     def __init__(self):
         self.mu = 4
+        self.mu1 = 6
         self.sigma = 0.5
 
     def sample(self, N):
-        samples = np.random.normal(self.mu, self.sigma, N)
+        # samples = np.random.choice([np.random.normal(self.mu, self.sigma, N), np.random.normal(self.mu1, self.sigma, N)])
+        samples = []
+        for x in range(N):
+            samples.append(np.random.choice([np.random.normal(self.mu, self.sigma), np.random.normal(self.mu1, self.sigma)]))
         samples.sort()
+        print samples
         return samples
 
 
@@ -408,7 +413,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num-steps', type=int, default=5000,
                         help='the number of training steps to take')
-    parser.add_argument('--hidden-size', type=int, default=2,
+    parser.add_argument('--hidden-size', type=int, default=4,
                         help='MLP hidden size')
     parser.add_argument('--batch-size', type=int, default=20,
                         help='the batch size')
@@ -422,9 +427,9 @@ def parse_args():
                         help='save every Nth frame for animation')
     parser.add_argument('--use-common-layer', type=bool, default=False,
                         help='Use the modified common layer')
-    parser.add_argument('--d_learning_rate', type=float, default=0.0040001,
+    parser.add_argument('--d_learning_rate', type=float, default=0.00002,
                         help='Change learning rate of generator')
-    parser.add_argument('--g_learning_rate', type=float, default=0.0040001,
+    parser.add_argument('--g_learning_rate', type=float, default=0.0002,
                         help='Change learning rate of discriminator')
     parser.add_argument('--generator_skip', type=float, default=1,
                         help='Change skip frequency of generator')
