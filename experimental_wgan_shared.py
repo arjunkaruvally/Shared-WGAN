@@ -46,37 +46,46 @@ class DataDistribution(object):
         loaded = np.fromfile(file=fd,dtype=np.uint8)
         trX = loaded[16:].reshape((60000,28,28,1)).astype(np.float)
 
-        # fd = open(os.path.join(data_dir,'train-labels-idx1-ubyte'))
-        # loaded = np.fromfile(file=fd,dtype=np.uint8)
-        # trY = loaded[8:].reshape((60000)).astype(np.float)
+        fd = open(os.path.join(data_dir,'train-labels-idx1-ubyte'))
+        loaded = np.fromfile(file=fd,dtype=np.uint8)
+        trY = loaded[8:].reshape((60000)).astype(np.float)
 
         fd = open(os.path.join(data_dir,'t10k-images-idx3-ubyte'))
         loaded = np.fromfile(file=fd,dtype=np.uint8)
         teX = loaded[16:].reshape((10000,28,28,1)).astype(np.float)
 
-        # fd = open(os.path.join(data_dir,'t10k-labels-idx1-ubyte'))
-        # loaded = np.fromfile(file=fd,dtype=np.uint8)
-        # teY = loaded[8:].reshape((10000)).astype(np.float)
+        fd = open(os.path.join(data_dir,'t10k-labels-idx1-ubyte'))
+        loaded = np.fromfile(file=fd,dtype=np.uint8)
+        teY = loaded[8:].reshape((10000)).astype(np.float)
 
-        # trY = np.asarray(trY)
-        # teY = np.asarray(teY)
-        
+        trY = np.asarray(trY)
+        teY = np.asarray(teY)
+
+        y = np.concatenate((trY, teY), axis=0)
         X = np.concatenate((trX, teX), axis=0)
         
+        np.random.seed(12)
         np.random.shuffle(X)
         
+        np.random.seed(12)
+        np.random.shuffle(y)
+
         self.X = X/255.0
+        self.y = y
 
 
-    def sample(self, N):
+    def sample(self, N, out_y=False):
         indices = np.random.choice(range(self.X.shape[0]), N)
         # return self.X[indices].reshape([N, 28, 28, 1])
+        if out_y:
+            return self.X[indices], self.y[indices]
+            
         return self.X[indices]
 
 
 class GeneratorDistribution(object):
-    def __init__(self):
-        pass
+    def __init__(self, range):
+        self.range = range
 
     def sample(self, N):
         return (np.random.uniform(-1, 1, size=[N, 100]))
@@ -259,7 +268,7 @@ class GAN(object):
         # print [v for v in vars if v.name.startswith('G/gshared/')][0]
         # print [v for v in vars if v.name.startswith('G/dshared/')]
 
-        # self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/w')][0])
+        self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/w')][0])
         # self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/b')][0])
 
         # self.d_params.remove([v for v in vars if v.name.startswith('D/dshared/w')][0])
@@ -351,7 +360,7 @@ def train(model, data, gen, params, index=0):
                 train_writer.add_summary(summary, step)
 
             # session.run([model.copy_d_w_g, model.copy_d_b_g])
-            # session.run([model.copy_d_w_g])
+            session.run([model.copy_d_w_g])
 
             # update generator
             z1 = gen.sample(params.batch_size)
@@ -563,7 +572,7 @@ def main(args):
         train(model, DataDistribution(), GeneratorDistribution(range=8), args)
 
     elif args.mode == "test":
-        test(model, GeneratorDistribution(), args)
+        test(model, GeneratorDistribution(range=8), args)
 
     else:
         print "Mode not found"

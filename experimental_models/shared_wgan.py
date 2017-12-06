@@ -14,6 +14,7 @@ https://arxiv.org/abs/1606.03498.
 from __future__ import division
 from ops import *
 from tensorflow.contrib import losses
+from IPython import embed
 
 import argparse
 import numpy as np
@@ -75,8 +76,8 @@ class DataDistribution(object):
 
 
 class GeneratorDistribution(object):
-    def __init__(self):
-        pass
+    def __init__(self, range):
+        self.range = range
 
     def sample(self, N):
         return (np.random.uniform(-1, 1, size=[N, 100]))
@@ -259,7 +260,7 @@ class GAN(object):
         # print [v for v in vars if v.name.startswith('G/gshared/')][0]
         # print [v for v in vars if v.name.startswith('G/dshared/')]
 
-        # self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/w')][0])
+        self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/w')][0])
         # self.g_params.remove([v for v in vars if v.name.startswith('G/gshared/b')][0])
 
         # self.d_params.remove([v for v in vars if v.name.startswith('D/dshared/w')][0])
@@ -333,8 +334,7 @@ def train(model, data, gen, params, index=0):
             # update discriminator
 
             if step < 25 or step%500 == 0:
-                # discriminator_train = 100
-                discriminator_train = params.discriminator_train
+                discriminator_train = 100
             else:
                 discriminator_train = params.discriminator_train
 
@@ -351,18 +351,22 @@ def train(model, data, gen, params, index=0):
                 train_writer.add_summary(summary, step)
 
             # session.run([model.copy_d_w_g, model.copy_d_b_g])
-            # session.run([model.copy_d_w_g])
+            session.run([model.copy_d_w_g])
 
             # update generator
-            z1 = gen.sample(params.batch_size)
-            
+            if step%params.generator_train == 0 or z1==None:
+                # print "change"
+                z1 = gen.sample(params.batch_size)
             summary, loss_g, _ = session.run([model.g_summary, model.loss_g, model.opt_g], {
                 # model.z: np.reshape(z1, (params.batch_size, 28, 28, 1))
                 model.z: z1
             })
 
             train_writer.add_summary(summary, step)
-            
+
+            # session.run([model.copy_g_w_d, model.copy_g_b_d])
+            # session.run([model.copy_g_w_d])
+
             if step % params.log_every == 0:
                 print('Epoch:{} step:{}: d:{}\tg:{}'.format(int(step*params.batch_size/70000), step, loss_d, loss_g))
 
@@ -401,6 +405,8 @@ def test(model, gen, params):
         else:
             print "No Session Found - exiting"
             return
+
+        embed()
 
         for i in range(params.test_count):
             print i+1,"/",params.test_count
@@ -563,7 +569,7 @@ def main(args):
         train(model, DataDistribution(), GeneratorDistribution(range=8), args)
 
     elif args.mode == "test":
-        test(model, GeneratorDistribution(), args)
+        test(model, GeneratorDistribution(range=8), args)
 
     else:
         print "Mode not found"
@@ -585,7 +591,7 @@ def parse_args():
                         help='restore session')
     parser.add_argument('--num-steps', type=int, default=50000,
                         help='the number of training steps to take')
-    parser.add_argument('--hidden-size', type=int, default=256,
+    parser.add_argument('--hidden-size', type=int, default=64,
                         help='MLP hidden size')
     parser.add_argument('--batch-size', type=int, default=64,
                         help='the batch size')
@@ -603,7 +609,7 @@ def parse_args():
                         help='Change learning rate of generator')
     parser.add_argument('--g_learning_rate', type=float, default=5e-5,
                         help='Change learning rate of discriminator')
-    parser.add_argument('--generator_train', type=float, default=10,
+    parser.add_argument('--generator_train', type=float, default=1,
                         help='Change generator training time')
     parser.add_argument('--discriminator_train', type=float, default=5,
                         help='Change discriminator training time')

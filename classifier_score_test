@@ -1,0 +1,27 @@
+Expected value of Entropy for distribution over outputs(Lower is better)
+
+** Perfect Classification Model **
+Entropy: 0
+Standard Deviation: 0
+
+** Random Noise **
+Mean Entropy:  2.1149151391
+Standard Deviation:  0.0864883872245
+
+** Dataset **
+Mean Entropy:  0.00621325
+Standard Deviation:  0.0478745
+
+** Initial Entropy(Both Architectures) **
+Mean Entropy:  0.481903
+Standard Deviation:  0.160115
+
+** Learned Models**
+
+** Standard WGAN model **
+Mean Entropy:  0.208024
+Standard Deviation:  0.310353
+
+** Shared weights model **
+Mean Entropy:  0.209418
+Standard Deviation:  0.30961

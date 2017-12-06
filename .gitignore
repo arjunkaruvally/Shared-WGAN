@@ -4,10 +4,12 @@ log
 data
 
 *.pyc
-plots/
+plots*/
 
-checkpoints/
+checkpoints*/
 
 completed/
 
 models_shared/
+
+log*
