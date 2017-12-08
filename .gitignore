@@ -13,3 +13,5 @@ completed/
 models_shared/
 
 log*
+
+.ipynb*
