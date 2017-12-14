@@ -37,6 +37,14 @@ class MNIST(object):
         y = np.concatenate((trY, teY), axis=0)
         X = np.concatenate((trX, teX), axis=0)
         
+        # mask_0 = y == 0
+        # mask_1 = y == 1
+
+        # mask = mask_0 + mask_1
+
+        # X = X[mask]
+        # y = y[mask]
+
         np.random.seed(12)
         np.random.shuffle(X)
         
@@ -51,14 +59,35 @@ class MNIST(object):
         self.image_channels = 1
         self.N = self.X.shape[0]
 
+        print "N ",self.N
+
+        self.index = 0
+
 
     def sample(self, N, out_y=False):
-        indices = np.random.choice(range(self.X.shape[0]), N)
+        # indices = np.random.choice(range(self.X.shape[0]), N)
         # return self.X[indices].reshape([N, 28, 28, 1])
+        
+        if self.index >= self.N:
+            self.index = 0
+
+        start_index = self.index
+        end_index = self.index+N
+        self.index += N
+
+        if end_index >= self.N:
+            start_index = 0
+            end_index = N
+
+        # for x in range(N):
+        #     plt.subplot(N/2, N/2, x+1)
+        #     plt.imshow(self.X[start_index: end_index][x].reshape(28, 28), cmap='gray')
+        # plt.show()
+
         if out_y:
-            return self.X[indices], self.y[indices]
+            return self.X[start_index: end_index], self.y[start_index: end_index]
             
-        return self.X[indices]
+        return self.X[start_index: end_index]
 
 
 

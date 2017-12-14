@@ -3,7 +3,7 @@ import os
 import json
 import scipy
 
-from models import *
+from models_experimental import *
 
 def parse_args():
 
@@ -21,9 +21,9 @@ def parse_args():
                         help='restore session')
     parser.add_argument('--num-steps', type=int, default=50000,
                         help='the number of training steps to take')
-    parser.add_argument('--hidden-size', type=int, default=256,
+    parser.add_argument('--hidden-size', type=int, default=128,
                         help='MLP hidden size')
-    parser.add_argument('--batch-size', type=int, default=32,
+    parser.add_argument('--batch-size', type=int, default=128,
                         help='the batch size')
     parser.add_argument('--minibatch', action='store_false',
                         help='use minibatch discrimination')
